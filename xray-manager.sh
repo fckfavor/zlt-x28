@@ -1,6 +1,6 @@
 #!/bin/sh
 #=============================================
-# Xray Manager - Tam Yönetim Scripti
+# Xray Manager v1.1.0 - Tam Yönetim Scripti
 # ZLT X28 - OpenWrt 19.07
 # Geliştirici: FF.Dev ⚡
 #=============================================
@@ -24,6 +24,7 @@ NC='\033[0m'
 #============== DEĞİŞKENLER ==============
 XRAY_BIN="/usr/bin/xray"
 XRAY_CONFIG="/etc/xray/config.json"
+XRAY_CONFIG_DIR="/etc/xray"
 XRAY_LOG_DIR="/var/log/xray"
 XRAY_INIT="/etc/init.d/xray"
 XRAY_UCI_CONFIG="/etc/config/xray"
@@ -124,7 +125,7 @@ setup_tun() {
     ip route add default dev $TUN_INTERFACE table $TUN_TABLE 2>/dev/null
 
     iptables -t mangle -N XRAY_TUN 2>/dev/null
-    iptables -t mangle -F XRAY_TUN 2>/dev/null
+    iptables -t mangle -F XRAY_TUN
     iptables -t mangle -A XRAY_TUN -i $TUN_INTERFACE -j RETURN
     iptables -t mangle -A XRAY_TUN -d 127.0.0.0/8 -j RETURN
     iptables -t mangle -A XRAY_TUN -d 224.0.0.0/4 -j RETURN
@@ -160,7 +161,7 @@ cleanup_tun() {
     print_success "TUN arayüzü temizlendi"
 }
 
-#============== CONFIG IMPORT ==============
+#============== VLESS CONFIG IMPORT ==============
 import_vless_config() {
     local url="$1"
     
@@ -228,11 +229,165 @@ import_vless_config() {
     echo -e "  UUID: ${CYAN}$uuid${NC}"
     echo -e "  Type: ${CYAN}$type${NC}, Security: ${CYAN}$security${NC}"
     
-    # Config oluşturma devamı...
-    # (VLESS config JSON oluşturma kısmı aynen kalacak)
-    # Buraya VLESS config oluşturma kodu gelecek
+    # Config oluştur
+    cat > $XRAY_CONFIG << EOF
+{
+  "log": {
+    "loglevel": "warning",
+    "error": "/var/log/xray/error.log",
+    "access": "/var/log/xray/access.log"
+  },
+  "dns": {
+    "servers": [
+      "https://1.1.1.1/dns-query",
+      "https://9.9.9.9/dns-query"
+    ]
+  },
+  "inbounds": [
+    {
+      "port": 1080,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "port": 1081,
+      "protocol": "http",
+      "settings": {}
+    },
+    {
+      "tag": "tun-in",
+      "protocol": "tun",
+      "settings": {
+        "address": ["172.19.0.2/30"],
+        "mtu": 1500,
+        "stack": "system"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$server_host",
+            "port": $server_port,
+            "users": [
+              {
+                "id": "$uuid",
+                "encryption": "$encryption",
+                "flow": "$flow"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "$type",
+        "security": "$security",
+EOF
+
+    if [ "$security" = "tls" ] || [ "$security" = "reality" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "tlsSettings": {
+          "serverName": "$sni"
+        },
+EOF
+    fi
+
+    # Stream settings
+    if [ "$type" = "tcp" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "tcpSettings": {
+          "header": {
+            "type": "none"
+          }
+        }
+EOF
+    elif [ "$type" = "ws" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "wsSettings": {
+          $(if [ -n "$path" ]; then echo "\"path\": \"$path\""; fi)
+          $(if [ -n "$path" ] && [ -n "$host" ]; then echo ","; fi)
+          $(if [ -n "$host" ]; then echo "\"headers\": { \"Host\": \"$host\" }"; fi)
+        }
+EOF
+    elif [ "$type" = "grpc" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "grpcSettings": {
+          "serviceName": "$serviceName"
+        }
+EOF
+    elif [ "$type" = "kcp" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "kcpSettings": {
+          "mtu": 1350,
+          "tti": 20,
+          "uplinkCapacity": 5,
+          "downlinkCapacity": 20,
+          "congestion": false,
+          "readBufferSize": 1,
+          "writeBufferSize": 1,
+          "header": {
+            "type": "none"
+          }
+        }
+EOF
+    else
+        cat >> $XRAY_CONFIG << EOF
+        "tcpSettings": {
+          "header": {
+            "type": "none"
+          }
+        }
+EOF
+    fi
+
+    cat >> $XRAY_CONFIG << EOF
+      },
+      "tag": "proxy"
+    },
+    {
+      "protocol": "freedom",
+      "settings": {},
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {},
+      "tag": "blocked"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["tun-in"],
+        "outboundTag": "proxy"
+      },
+      {
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}
+EOF
+
+    print_success "VLESS config oluşturuldu"
+    return 0
 }
 
+#============== VMESS CONFIG IMPORT ==============
 import_vmess_config() {
     local url="$1"
     
@@ -263,11 +418,161 @@ import_vmess_config() {
     echo -e "  Sunucu: ${CYAN}$add:$port${NC}"
     echo -e "  Protocol: ${CYAN}$net${NC}, TLS: ${CYAN}$tls${NC}"
     
-    # Config oluşturma devamı...
-    # (VMess config JSON oluşturma kısmı aynen kalacak)
-    # Buraya VMess config oluşturma kodu gelecek
+    # Config oluştur
+    cat > $XRAY_CONFIG << EOF
+{
+  "log": {
+    "loglevel": "warning",
+    "error": "/var/log/xray/error.log",
+    "access": "/var/log/xray/access.log"
+  },
+  "dns": {
+    "servers": [
+      "https://1.1.1.1/dns-query",
+      "https://9.9.9.9/dns-query"
+    ]
+  },
+  "inbounds": [
+    {
+      "port": 1080,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "port": 1081,
+      "protocol": "http",
+      "settings": {}
+    },
+    {
+      "tag": "tun-in",
+      "protocol": "tun",
+      "settings": {
+        "address": ["172.19.0.2/30"],
+        "mtu": 1500,
+        "stack": "system"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vmess",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$add",
+            "port": $port,
+            "users": [
+              {
+                "id": "$id",
+                "alterId": $aid,
+                "security": "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "$net",
+        "security": "$tls",
+EOF
+
+    if [ "$tls" = "tls" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "tlsSettings": {
+          "serverName": "$sni"
+        },
+EOF
+    fi
+
+    # Stream settings
+    if [ "$net" = "tcp" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "tcpSettings": {
+          "header": {
+            "type": "$type"
+            $(if [ "$type" = "http" ] && [ -n "$host" ]; then
+                echo ', "request": { "headers": { "Host": ["'$host'"] } }'
+            fi)
+          }
+        }
+EOF
+    elif [ "$net" = "ws" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "wsSettings": {
+          $(if [ -n "$path" ]; then echo "\"path\": \"$path\""; fi)
+          $(if [ -n "$path" ] && [ -n "$host" ]; then echo ","; fi)
+          $(if [ -n "$host" ]; then echo "\"headers\": { \"Host\": \"$host\" }"; fi)
+        }
+EOF
+    elif [ "$net" = "h2" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "httpSettings": {
+          $(if [ -n "$path" ]; then echo "\"path\": \"$path\""; fi)
+          $(if [ -n "$path" ] && [ -n "$host" ]; then echo ","; fi)
+          $(if [ -n "$host" ]; then echo "\"host\": [\"$host\"]"; fi)
+        }
+EOF
+    elif [ "$net" = "grpc" ]; then
+        cat >> $XRAY_CONFIG << EOF
+        "grpcSettings": {
+          "serviceName": "$path"
+        }
+EOF
+    else
+        cat >> $XRAY_CONFIG << EOF
+        "tcpSettings": {
+          "header": {
+            "type": "none"
+          }
+        }
+EOF
+    fi
+
+    cat >> $XRAY_CONFIG << EOF
+      },
+      "tag": "proxy"
+    },
+    {
+      "protocol": "freedom",
+      "settings": {},
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {},
+      "tag": "blocked"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["tun-in"],
+        "outboundTag": "proxy"
+      },
+      {
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}
+EOF
+
+    print_success "VMess config oluşturuldu: $ps"
+    return 0
 }
 
+#============== CONFIG URL'DEN YÜKLE ==============
 import_config_from_url() {
     local url="$1"
     
@@ -289,13 +594,14 @@ import_config_from_url() {
         echo ""
         print_info "Config test ediliyor..."
         
-        if $XRAY_BIN test -config $XRAY_CONFIG; then
+        if $XRAY_BIN test -config $XRAY_CONFIG >/dev/null 2>&1; then
             print_success "Config testi başarılı!"
             $XRAY_INIT restart
             sleep 2
             show_status
         else
             print_error "Config testi başarısız!"
+            $XRAY_BIN test -config $XRAY_CONFIG
         fi
     fi
 }
@@ -371,7 +677,7 @@ setup_tun() {
 	ip route add default dev $TUN_INTERFACE table $TUN_TABLE 2>/dev/null
 
 	iptables -t mangle -N XRAY_TUN 2>/dev/null
-	iptables -t mangle -F XRAY_TUN 2>/dev/null
+	iptables -t mangle -F XRAY_TUN
 	iptables -t mangle -A XRAY_TUN -i $TUN_INTERFACE -j RETURN
 	iptables -t mangle -A XRAY_TUN -d 127.0.0.0/8 -j RETURN
 	iptables -t mangle -A XRAY_TUN -d 224.0.0.0/4 -j RETURN
@@ -386,6 +692,8 @@ setup_tun() {
 	iptables -t mangle -A XRAY_TUN -j MARK --set-mark $TUN_FWMARK
 	iptables -t mangle -C PREROUTING -j XRAY_TUN 2>/dev/null || iptables -t mangle -A PREROUTING -j XRAY_TUN
 	iptables -t mangle -C OUTPUT -j XRAY_TUN 2>/dev/null || iptables -t mangle -A OUTPUT -j XRAY_TUN
+	
+	logger -t xray "TUN interface $TUN_INTERFACE ready"
 }
 
 cleanup_tun() {
@@ -399,6 +707,8 @@ cleanup_tun() {
 
 	ip link set $TUN_INTERFACE down 2>/dev/null
 	ip link delete $TUN_INTERFACE 2>/dev/null
+	
+	logger -t xray "TUN interface cleaned up"
 }
 
 start_service() {
@@ -508,9 +818,7 @@ EOF
       },
       {
         "type": "field",
-        "ip": [
-          "geoip:private"
-        ],
+        "ip": ["geoip:private"],
         "outboundTag": "direct"
       }
     ]
@@ -527,6 +835,10 @@ EOF
     echo -e "\n${CYAN}[5/8]${NC} LuCI controller oluşturuluyor..."
     mkdir -p /usr/lib/lua/luci/controller
     cat > /usr/lib/lua/luci/controller/xray.lua << 'EOF'
+--==========================================
+-- Xray Controller - FF.Dev ⚡
+--==========================================
+
 module("luci.controller.xray", package.seeall)
 
 function index()
@@ -586,7 +898,7 @@ function action_parse_url()
     
     local parse_result = luci.sys.exec("/usr/bin/xray_manager.sh import \"" .. url .. "\" 2>&1")
     
-    if parse_result:find("başarıyla") or parse_result:find("success") then
+    if parse_result:find("başarıyla") or parse_result:find("success") or parse_result:find("oluşturuldu") then
         result.success = true
         result.message = "Config başarıyla içe aktarıldı!"
     else
@@ -604,9 +916,13 @@ EOF
     mkdir -p /usr/lib/lua/luci/model/cbi/xray
     
     cat > /usr/lib/lua/luci/model/cbi/xray/general.lua << 'EOF'
+--==========================================
+-- Xray General Settings - FF.Dev ⚡
+--==========================================
+
 local sys = require "luci.sys"
 
-m = Map("xray", translate("Xray"), translate("Xray is a platform for building proxies to bypass network restrictions."))
+m = Map("xray", translate("Xray"), translate("Xray - FF.Dev Edition ⚡"))
 
 s = m:section(TypedSection, "xray", translate("Service Status"))
 s.anonymous = true
@@ -667,10 +983,14 @@ return m
 EOF
 
     cat > /usr/lib/lua/luci/model/cbi/xray/config.lua << 'EOF'
+--==========================================
+-- Xray Config Editor - FF.Dev ⚡
+--==========================================
+
 local fs = require "nixio.fs"
 local sys = require "luci.sys"
 
-m = Map("xray", translate("Xray Configuration"), translate("Edit Xray JSON configuration file."))
+m = Map("xray", translate("Xray Configuration"), translate("Edit Xray JSON configuration file - FF.Dev ⚡"))
 
 s = m:section(TypedSection, "xray", "")
 s.anonymous = true
@@ -692,9 +1012,9 @@ function o.write(self, section, value)
         if sys.call("/usr/bin/xray test -c " .. tmpfile .. " >/dev/null 2>&1") == 0 then
             fs.writefile("/etc/xray/config.json", value)
             sys.call("/etc/init.d/xray reload >/dev/null 2>&1 &")
-            m.message = translate("Configuration saved and service reloaded.")
+            m.message = translate("✅ Configuration saved and service reloaded.")
         else
-            m.message = translate("ERROR: Invalid JSON! Configuration NOT saved.")
+            m.message = translate("❌ ERROR: Invalid JSON! Configuration NOT saved.")
         end
         fs.remove(tmpfile)
     end
@@ -704,11 +1024,15 @@ return m
 EOF
 
     cat > /usr/lib/lua/luci/model/cbi/xray/import.lua << 'EOF'
+--==========================================
+-- Xray URL Import - FF.Dev ⚡
+--==========================================
+
 local sys = require "luci.sys"
 local http = require "luci.http"
 
 m = Map("xray", translate("Import Xray Configuration"), 
-        translate("Import configuration from VMess/VLESS URL."))
+        translate("Import configuration from VMess/VLESS URL - FF.Dev ⚡"))
 
 s = m:section(TypedSection, "xray", translate("URL Import"))
 s.anonymous = true
@@ -721,11 +1045,15 @@ o.placeholder = "vless://uuid@server:port?type=ws&security=tls&path=/path&host=e
 help = s:option(DummyValue, "_help", translate("Supported Formats"))
 help.rawhtml = true
 help.value = [[
-<div style="background:#f9f9f9;padding:10px;border-radius:5px;font-size:12px">
+<div style="background:#f9f9f9;padding:10px;border-radius:5px;font-size:12px;border-left:4px solid #00aa00">
+<strong>✨ FF.Dev Xray Import ✨</strong><br><br>
 <strong>VMess:</strong> vmess://eyJ2IjoiMiIsInBzIjoiIiw...<br>
 <strong>VLESS:</strong> vless://uuid@server:port?type=ws&path=/path&security=tls<br>
 <br>
-<strong>Parameters:</strong> type, security, path, host, sni, serviceName, flow, encryption
+<strong>Supported Parameters:</strong><br>
+• type: tcp, ws, grpc, kcp<br>
+• security: none, tls, reality<br>
+• path, host, sni, serviceName, flow, encryption
 </div>
 ]]
 
@@ -776,17 +1104,28 @@ EOF
     
     cat > /usr/lib/lua/luci/view/xray/status.htm << 'EOF'
 <%+cbi/valueheader%>
+<style>
+.ffdev-badge {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: bold;
+    margin-left: 5px;
+}
+</style>
 <script type="text/javascript">
     XHR.poll(3, '<%=luci.dispatcher.build_url("admin", "services", "xray", "status")%>', null,
         function(x, status) {
             var tb = document.getElementById('xray_status');
             if (tb && status) {
                 var html = status.running 
-                    ? '<span style="color:green;font-weight:bold">● Running</span><br/>' +
+                    ? '<span style="color:green;font-weight:bold">● Running</span> <span class="ffdev-badge">FF.Dev</span><br/>' +
                       '<small>Version: <b>' + status.version + '</b> | ' +
                       'Uptime: <b>' + status.uptime + '</b> | ' +
                       'Memory: <b>' + status.memory + '</b></small>'
-                    : '<span style="color:red;font-weight:bold">● Stopped</span><br/>' +
+                    : '<span style="color:red;font-weight:bold">● Stopped</span> <span class="ffdev-badge">FF.Dev</span><br/>' +
                       '<small>Version: <b>' + status.version + '</b></small>';
                 
                 html += '<br><br><a href="<%=luci.dispatcher.build_url("admin", "services", "xray", "import")%>" ' +
@@ -796,7 +1135,7 @@ EOF
         }
     );
 </script>
-<div id="xray_status" style="padding:10px;background:#f9f9f9;border-radius:5px">
+<div id="xray_status" style="padding:10px;background:#f9f9f9;border-radius:5px;border-left:4px solid #00aa00">
     <em><%:Checking status...%></em>
 </div>
 <%+cbi/valuefooter%>
@@ -806,6 +1145,7 @@ EOF
 <%+cbi/valueheader%>
 <input class="cbi-button cbi-button-edit" type="button" value="<%:View Logs%>" 
        onclick="window.open('<%=luci.dispatcher.build_url("admin", "services", "xray", "logs")%>', '_blank', 'width=800,height=600,scrollbars=yes')" />
+<div style="font-size:10px;color:#666;margin-top:2px">FF.Dev ⚡</div>
 <%+cbi/valuefooter%>
 EOF
     print_success "Templates oluşturuldu"
@@ -816,7 +1156,7 @@ EOF
     cat > /usr/share/rpcd/acl.d/luci-app-xray.json << 'EOF'
 {
     "luci-app-xray": {
-        "description": "Grant access to Xray service",
+        "description": "Xray Manager - FF.Dev Edition",
         "read": {
             "ubus": {"service": ["list", "signal"]},
             "uci": ["xray"],
@@ -839,7 +1179,7 @@ EOF
 EOF
     print_success "RPCD ACL oluşturuldu"
     
-    # Temizlik
+    # Temizlik ve final
     echo -e "\n${CYAN}Finalizasyon${NC} yapılıyor..."
     rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/* /tmp/luci-sessions/*
     /etc/init.d/rpcd restart 2>/dev/null
@@ -850,6 +1190,7 @@ EOF
     echo -e "${GREEN}📁 Menü:${NC} Services → Xray → Import Config"
     echo ""
     echo -e "${YELLOW}⚠ URL'nizi yapıştırın ve Import butonuna basın.${NC}"
+    echo -e "${PURPLE}⚡ FF.Dev - Yazılımın Efendisi ⚡${NC}"
     echo ""
 }
 
@@ -863,7 +1204,7 @@ uninstall_xray() {
     
     print_info "Dosyalar siliniyor..."
     rm -f $XRAY_BIN
-    rm -rf /etc/xray
+    rm -rf $XRAY_CONFIG_DIR
     rm -rf $XRAY_LOG_DIR
     rm -f $XRAY_INIT
     rm -f $XRAY_UCI_CONFIG
@@ -876,6 +1217,7 @@ uninstall_xray() {
     /etc/init.d/rpcd restart 2>/dev/null
     
     print_success "Xray tamamen kaldırıldı!"
+    echo -e "${PURPLE}⚡ FF.Dev ⚡${NC}"
     echo ""
 }
 
@@ -891,7 +1233,10 @@ update_xray() {
     echo -e "  Mevcut: ${CYAN}$current_version${NC}"
     echo -e "  Yeni:   ${CYAN}$XRAY_VERSION${NC}"
     
-    [ "$current_version" = "$XRAY_VERSION" ] && { print_warning "Zaten güncel!"; return 0; }
+    if [ "$current_version" = "$XRAY_VERSION" ]; then
+        print_warning "Zaten güncel!"
+        return 0
+    fi
     
     $XRAY_INIT stop
     cp $XRAY_CONFIG /tmp/xray_config_backup.json
@@ -917,6 +1262,8 @@ update_xray() {
         cp /tmp/xray_config_backup.json $XRAY_CONFIG
         $XRAY_INIT start
     fi
+    
+    echo -e "${PURPLE}⚡ FF.Dev ⚡${NC}"
 }
 
 #============== DURUM ==============
@@ -945,14 +1292,18 @@ show_status() {
     
     echo -e "\n  Config: ${CYAN}$XRAY_CONFIG${NC}"
     echo -e "  Logs:   ${CYAN}$XRAY_LOG_DIR/error.log${NC}"
+    echo -e "\n${PURPLE}⚡ FF.Dev ⚡${NC}"
 }
 
 #============== LOG GÖSTER ==============
 show_logs() {
     [ ! -f $XRAY_LOG_DIR/error.log ] && { print_error "Log dosyası bulunamadı!"; return 1; }
     echo ""
+    echo -e "${BLUE}━━━━━━ Son 50 Log Satırı ━━━━━${NC}"
+    echo ""
     tail -n 50 $XRAY_LOG_DIR/error.log
     echo ""
+    echo -e "${PURPLE}⚡ FF.Dev ⚡${NC}"
 }
 
 #============== MENÜ ==============
@@ -989,19 +1340,32 @@ case "$1" in
     status) show_status; exit 0 ;;
     logs) show_logs; exit 0 ;;
     import) 
-        [ -n "$2" ] && { import_config_from_url "$2"; exit 0; } || {
+        if [ -n "$2" ]; then
+            import_config_from_url "$2"
+            exit 0
+        else
             echo "Kullanım: $0 import <vmess_or_vless_url>"
             exit 1
-        }
+        fi
         ;;
     start) $XRAY_INIT start; show_status; exit 0 ;;
     stop) $XRAY_INIT stop; show_status; exit 0 ;;
     restart) $XRAY_INIT restart; show_status; exit 0 ;;
     --help|-h)
-        echo "Kullanım: $0 [install|uninstall|update|status|logs|import|start|stop|restart]"
+        echo "Xray Manager v${VERSION} - FF.Dev ⚡"
         echo ""
-        echo "  import <url>  - VMess/VLESS URL'den config içe aktar"
-        echo "  logs          - Son 50 log satırını göster"
+        echo "Kullanım: $0 [komut]"
+        echo ""
+        echo "Komutlar:"
+        echo "  install          - Xray kurulumu yap"
+        echo "  uninstall        - Xray kaldır"
+        echo "  update           - Xray güncelle"
+        echo "  status           - Durum göster"
+        echo "  logs             - Logları göster"
+        echo "  import <url>     - URL'den config içe aktar"
+        echo "  start            - Servisi başlat"
+        echo "  stop             - Servisi durdur"
+        echo "  restart          - Servisi yeniden başlat"
         echo ""
         echo "Parametresiz çalıştırırsanız interaktif menü açılır."
         exit 0
@@ -1025,10 +1389,22 @@ while true; do
         9) 
             echo -n "🔗 VMess/VLESS URL: "
             read config_url
-            [ -n "$config_url" ] && import_config_from_url "$config_url" || print_error "URL boş olamaz!"
+            if [ -n "$config_url" ]; then
+                import_config_from_url "$config_url"
+            else
+                print_error "URL boş olamaz!"
+            fi
             read -p "Devam için ENTER..."; 
             ;;
-        0) echo -e "\n${GREEN}Görüşmek üzere!${NC}\n"; exit 0 ;;
+        0) 
+            echo ""
+            echo -e "${PURPLE}╔══════════════════════════════╗${NC}"
+            echo -e "${PURPLE}║     FF.Dev - Görüşmek Üzere  ║${NC}"
+            echo -e "${PURPLE}║        ⚡ Hoşçakal ⚡         ║${NC}"
+            echo -e "${PURPLE}╚══════════════════════════════╝${NC}"
+            echo ""
+            exit 0 
+            ;;
         *) print_error "Geçersiz seçim!"; sleep 2; ;;
     esac
 done
