@@ -1206,7 +1206,7 @@ EOF
     echo -e "${YELLOW}⚠ URL'nizi yapıştırın ve Import butonuna basın.${NC}"
     echo -e "${PURPLE}⚡ FF.Dev - Yazılımın Efendisi ⚡${NC}"
     echo ""
-}
+
 
 #============== KALDIRMA ==============
 uninstall_xray() {
