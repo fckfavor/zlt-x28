@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # =============================
-# BINARY INSTALLER v3.0 - ZIP EDITION
+# BINARY INSTALLER v3.1 - ZIP EDITION
 # OpenWrt / BusyBox Optimized
+# Fixed -o output naming
 # =============================
 
 GREEN="\033[0;32m"
@@ -22,70 +23,50 @@ print_red() { echo -e "${RED}$1${NC}"; }
 print_yellow() { echo -e "${YELLOW}$1${NC}"; }
 print_blue() { echo -e "${BLUE}$1${NC}"; }
 
-# ---------- Progress Bar for wget ----------
-download_with_progress() {
-    URL="$1"
-    OUTPUT="$2"
-    
-    print_blue "Downloading: $(basename "$OUTPUT")"
-    
-    # BusyBox wget with progress dots
-    wget -O "$OUTPUT" "$URL" 2>&1 | while read line; do
-        if echo "$line" | grep -q '%'; then
-            PERCENT=$(echo "$line" | grep -o '[0-9]\+%' | head -1)
-            if [ -n "$PERCENT" ]; then
-                bars=$(( ${PERCENT%\%} / 2 ))
-                printf "\r${BLUE}[%-50s${NC}] %s" "$(printf '#%.0s' $(seq 1 $bars 2>/dev/null || echo 0))" "$PERCENT"
-            fi
-        fi
-    done
-    
-    if [ $? -eq 0 ] && [ -f "$OUTPUT" ]; then
-        printf "\r${GREEN}[##################################################] 100%%${NC}\n"
-        return 0
-    else
-        printf "\r${RED}[##################################################] FAILED${NC}\n"
-        return 1
-    fi
-}
-
-# ---------- Root Check ----------
-check_root() {
-    if [ "$(id -u)" != "0" ]; then
-        print_red "Error: Root privileges required!"
-        exit 1
-    fi
-}
-
-# ---------- Create Directories ----------
-create_dirs() {
-    print_yellow "Creating directories..."
-    mkdir -p "$DATA_DIR"
-    mkdir -p "$TEMP_DIR"
-    print_green "✓ Directory: $DATA_DIR"
-    print_green "✓ Temp: $TEMP_DIR"
-}
-
-# ---------- Download ZIP ----------
+# ---------- Download with explicit output ----------
 download_zip() {
     ZIP_FILE="$TEMP_DIR/repo.zip"
     
-    print_blue "Downloading complete repository as ZIP..."
+    print_blue "Downloading repository as ZIP..."
     print_yellow "URL: $GITHUB_ZIP"
+    print_yellow "Output: $ZIP_FILE"
     
+    # Create temp dir
+    mkdir -p "$TEMP_DIR"
+    
+    # Try wget first with explicit -O
     if command -v wget >/dev/null 2>&1; then
-        download_with_progress "$GITHUB_ZIP" "$ZIP_FILE"
+        print_blue "Using wget..."
+        wget -O "$ZIP_FILE" "$GITHUB_ZIP" 2>&1 | while read line; do
+            if echo "$line" | grep -q '%'; then
+                PERCENT=$(echo "$line" | grep -o '[0-9]\+%' | head -1)
+                if [ -n "$PERCENT" ]; then
+                    printf "\r${BLUE}Downloading: %s${NC}" "$PERCENT"
+                fi
+            fi
+        done
+        printf "\n"
     else
-        curl -L "$GITHUB_ZIP" -o "$ZIP_FILE" --progress-bar
+        # Fallback to curl with explicit -o
+        print_blue "Using curl..."
+        curl -L -o "$ZIP_FILE" "$GITHUB_ZIP" --progress-bar
     fi
     
-    if [ ! -f "$ZIP_FILE" ] || [ ! -s "$ZIP_FILE" ]; then
-        print_red "Download failed!"
+    # Check if download succeeded
+    if [ ! -f "$ZIP_FILE" ]; then
+        print_red "Download failed: $ZIP_FILE not created"
+        return 1
+    fi
+    
+    if [ ! -s "$ZIP_FILE" ]; then
+        print_red "Download failed: $ZIP_FILE is empty"
+        rm -f "$ZIP_FILE"
         return 1
     fi
     
     SIZE=$(ls -l "$ZIP_FILE" | awk '{print $5}')
     print_green "✓ ZIP downloaded: $SIZE bytes"
+    print_green "  Location: $ZIP_FILE"
     return 0
 }
 
@@ -93,34 +74,34 @@ download_zip() {
 extract_zip() {
     ZIP_FILE="$TEMP_DIR/repo.zip"
     
-    print_blue "Extracting ZIP..."
+    if [ ! -f "$ZIP_FILE" ]; then
+        print_red "ZIP file not found: $ZIP_FILE"
+        return 1
+    fi
     
-    # Check if unzip exists
-    if ! command -v unzip >/dev/null 2>&1; then
-        print_yellow "unzip not found, trying to extract with tar/ar..."
-        
-        # Try to list contents
-        cd "$TEMP_DIR"
-        
-        # Alternative extraction for BusyBox
-        if command -v tar >/dev/null 2>&1; then
-            print_yellow "Using tar to extract..."
-            tar -xf "$ZIP_FILE" 2>/dev/null
-        else
-            # Fallback: use unzip from busybox
-            busybox unzip "$ZIP_FILE" -d "$TEMP_DIR" 2>/dev/null
-        fi
+    print_blue "Extracting ZIP..."
+    cd "$TEMP_DIR"
+    
+    # Try multiple extraction methods
+    if command -v unzip >/dev/null 2>&1; then
+        print_blue "Using unzip..."
+        unzip -q "$ZIP_FILE"
+    elif command -v tar >/dev/null 2>&1; then
+        print_blue "Using tar..."
+        tar -xf "$ZIP_FILE" 2>/dev/null
     else
-        unzip -q "$ZIP_FILE" -d "$TEMP_DIR"
+        print_blue "Using busybox unzip..."
+        busybox unzip "$ZIP_FILE" 2>/dev/null
     fi
     
     # Check if extraction worked
     if [ -d "$TEMP_DIR/zlt-x28-main" ]; then
         print_green "✓ Extraction complete!"
+        print_green "  Extracted to: $TEMP_DIR/zlt-x28-main"
         return 0
     else
-        print_red "Extraction failed! Looking for extracted files..."
-        find "$TEMP_DIR" -type d | head -5
+        print_red "Extraction failed!"
+        ls -la "$TEMP_DIR"
         return 1
     fi
 }
@@ -129,8 +110,14 @@ extract_zip() {
 list_binaries() {
     BINARY_SOURCE="$TEMP_DIR/$BINARY_PATH"
     
+    print_blue "Looking for binaries in: $BINARY_SOURCE"
+    
     if [ ! -d "$BINARY_SOURCE" ]; then
-        print_red "Binary directory not found: $BINARY_SOURCE"
+        print_red "Binary directory not found!"
+        print_yellow "Contents of $TEMP_DIR:"
+        ls -la "$TEMP_DIR"
+        print_yellow "Searching for binaries directory..."
+        find "$TEMP_DIR" -name "binaries" -type d 2>/dev/null
         return 1
     fi
     
@@ -144,10 +131,15 @@ list_binaries() {
     
     COUNT=$(echo "$BINARIES" | wc -l)
     print_green "✓ Found $COUNT binaries in ZIP:"
-    echo "$BINARIES" | while read bin; do
-        SIZE=$(ls -l "$BINARY_SOURCE/$bin" 2>/dev/null | awk '{print $5}')
-        echo "   - $bin ($SIZE bytes)"
+    echo "----------------------------------------"
+    for bin in $BINARIES; do
+        if [ -f "$BINARY_SOURCE/$bin" ]; then
+            SIZE=$(ls -l "$BINARY_SOURCE/$bin" | awk '{print $5}')
+            HUMAN_SIZE=$([ $SIZE -gt 1048576 ] && echo "$((SIZE / 1048576))MB" || echo "$((SIZE / 1024))KB")
+            printf "  %-15s %s bytes (%s)\n" "$bin" "$SIZE" "$HUMAN_SIZE"
+        fi
     done
+    echo "----------------------------------------"
     
     return 0
 }
@@ -203,7 +195,8 @@ install_binary() {
     ln -sf "$DEST" "/usr/bin/$BINARY_NAME" 2>/dev/null
     
     SIZE=$(ls -l "$DEST" | awk '{print $5}')
-    print_green "✓ $BINARY_NAME installed ($SIZE bytes)"
+    HUMAN_SIZE=$([ $SIZE -gt 1048576 ] && echo "$((SIZE / 1048576))MB" || echo "$((SIZE / 1024))KB")
+    print_green "✓ $BINARY_NAME installed ($HUMAN_SIZE)"
 }
 
 # ---------- Install All Binaries ----------
@@ -253,11 +246,28 @@ cleanup() {
     print_green "✓ Cleanup complete!"
 }
 
+# ---------- Root Check ----------
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        print_red "Error: Root privileges required!"
+        exit 1
+    fi
+}
+
+# ---------- Create Directories ----------
+create_dirs() {
+    print_yellow "Creating directories..."
+    mkdir -p "$DATA_DIR"
+    mkdir -p "$TEMP_DIR"
+    print_green "✓ Data directory: $DATA_DIR"
+    print_green "✓ Temp directory: $TEMP_DIR"
+}
+
 # ---------- Show Menu ----------
 show_menu() {
     clear
     echo "============================================"
-    echo "  BINARY INSTALLER v3.0 - ZIP EDITION"
+    echo "  BINARY INSTALLER v3.1 - ZIP EDITION"
     echo "         OpenWrt / BusyBox"
     echo "============================================"
     
@@ -265,6 +275,7 @@ show_menu() {
     INSTALLED_COUNT=0
     TOTAL_COUNT=0
     
+    # Convert BINARIES to list
     for f in $BINARIES; do
         TOTAL_COUNT=$((TOTAL_COUNT + 1))
         if binary_exists "$f"; then
@@ -328,18 +339,31 @@ main() {
     check_root
     create_dirs
     
-    print_blue "Step 1/3: Downloading ZIP..."
+    echo ""
+    print_blue "╔══════════════════════════════════════╗"
+    print_blue "║     STEP 1/3: DOWNLOADING ZIP       ║"
+    print_blue "╚══════════════════════════════════════╝"
+    echo ""
     download_zip || exit 1
     
-    print_blue "Step 2/3: Extracting ZIP..."
+    echo ""
+    print_blue "╔══════════════════════════════════════╗"
+    print_blue "║     STEP 2/3: EXTRACTING ZIP        ║"
+    print_blue "╚══════════════════════════════════════╝"
+    echo ""
     extract_zip || exit 1
     
-    print_blue "Step 3/3: Listing binaries..."
+    echo ""
+    print_blue "╔══════════════════════════════════════╗"
+    print_blue "║     STEP 3/3: LISTING BINARIES      ║"
+    print_blue "╚══════════════════════════════════════╝"
+    echo ""
     list_binaries || exit 1
     
     echo ""
-    print_green "✓ Repository loaded successfully!"
-    print_yellow "You can now install binaries from local ZIP"
+    print_green "╔══════════════════════════════════════╗"
+    print_green "║     ✓ READY TO INSTALL               ║"
+    print_green "╚══════════════════════════════════════╝"
     echo ""
     
     while true; do
