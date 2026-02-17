@@ -1,9 +1,10 @@
 <div align="center">
-
+<div align="center">
 
 <img src="https://raw.githubusercontent.com/fckfavor/zlt-x28/main/ico.png" width="120" height="120" alt="FF.Dev Logo">
+<div align="center">
 # ⚡ FF.Dev ⚡
-
+<div align="center">
 <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=30&duration=3000&pause=1000&color=00FF00&center=true&vCenter=true&width=435&lines=ZLT+X28+Master;Binary+Hunter;VPN+Architect;Unlock+King" alt="Typing SVG" />
 
 ---
