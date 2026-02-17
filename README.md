@@ -12,7 +12,7 @@
 
 ---
 
-## 🛠️ **Yaptıklarım**
+## 🛠️ **custom**
 
 <table align="center">
   <tr>
