@@ -82,6 +82,15 @@ check_requirements() {
     local missing=""
     local packages=""
     
+    # Xray zaten var mı kontrol et - SADECE BUNU EKLE
+    if [ -f "$XRAY_BIN" ]; then
+        print_success "Xray mevcut: $($XRAY_BIN version | head -n1)"
+    else
+        print_error "Xray binary bulunamadı: $XRAY_BIN"
+        return 1
+    fi
+    
+    # wget, unzip, jq kontrolü (bunlar zaten vardı)
     command -v wget >/dev/null 2>&1 || { missing="${missing}wget "; packages="${packages}wget "; }
     command -v unzip >/dev/null 2>&1 || { missing="${missing}unzip "; packages="${packages}unzip "; }
     command -v jq >/dev/null 2>&1 || { missing="${missing}jq "; packages="${packages}jq "; }
@@ -610,7 +619,12 @@ import_config_from_url() {
 install_xray() {
     print_header "Xray Kurulumu Başlıyor"
     
-    check_requirements || exit 1
+    # Xray zaten var mı kontrol et
+    if [ -f "$XRAY_BIN" ]; then
+        print_warning "Xray zaten kurulu! Sadece eksik dosyalar tamamlanacak."
+        # Sadece LuCI, config ve init script kur
+    else
+        check_requirements || exit 1
     resolve_xray_release
     
     # 1. Binary kurulumu
