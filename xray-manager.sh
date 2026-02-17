@@ -2,14 +2,11 @@
 #=============================================
 # Xray Manager v1.1.0 - Tam Yönetim Scripti
 # ZLT X28 - OpenWrt 19.07
+# Mevcut Xray Kullanır (v25.12.2+ uyumlu)
 # Geliştirici: FF.Dev ⚡
 #=============================================
 
 VERSION="1.1.0"
-DEFAULT_XRAY_VERSION="1.8.23"
-XRAY_VERSION="$DEFAULT_XRAY_VERSION"
-XRAY_BASE_URL="https://github.com/XTLS/Xray-core/releases/download"
-XRAY_LATEST_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 #============== RENK TANIMLARI ==============
 RED='\033[0;31m'
@@ -48,33 +45,6 @@ print_error() { echo -e "${RED}✗${NC} $1"; }
 print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
 print_info() { echo -e "${CYAN}ℹ${NC} $1"; }
 
-#============== XRAY VERSİYON YÖNETİMİ ==============
-set_xray_download_url() {
-    XRAY_URL="${XRAY_BASE_URL}/v${XRAY_VERSION}/Xray-linux-arm64-v8a.zip"
-}
-
-resolve_xray_release() {
-    XRAY_VERSION="$DEFAULT_XRAY_VERSION"
-    set_xray_download_url
-
-    if ! command -v jq >/dev/null 2>&1; then
-        print_warning "jq kurulu değil, sabit Xray sürümü kullanılacak (v${XRAY_VERSION})."
-        return 1
-    fi
-
-    local latest_tag=$(wget -qO- --timeout=10 "$XRAY_LATEST_RELEASE_API" | jq -r '.tag_name' 2>/dev/null)
-
-    if [ -n "$latest_tag" ] && echo "$latest_tag" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
-        XRAY_VERSION="${latest_tag#v}"
-        set_xray_download_url
-        print_success "Son Xray sürümü: v${XRAY_VERSION}"
-        return 0
-    fi
-
-    print_warning "Son sürüm bilgisi alınamadı, sabit sürüm kullanılacak (v${XRAY_VERSION})."
-    return 1
-}
-
 #============== GEREKSİNİM KONTROLÜ ==============
 check_requirements() {
     print_header "Gereksinimler Kontrol Ediliyor"
@@ -82,15 +52,14 @@ check_requirements() {
     local missing=""
     local packages=""
     
-    # Xray zaten var mı kontrol et - SADECE BUNU EKLE
-    if [ -f "$XRAY_BIN" ]; then
-        print_success "Xray mevcut: $($XRAY_BIN version | head -n1)"
-    else
+    if [ ! -f "$XRAY_BIN" ]; then
         print_error "Xray binary bulunamadı: $XRAY_BIN"
+        print_info "Lütfen önce Xray kurun: https://github.com/XTLS/Xray-core"
         return 1
+    else
+        print_success "Xray mevcut: $($XRAY_BIN version | head -n1)"
     fi
     
-    # wget, unzip, jq kontrolü (bunlar zaten vardı)
     command -v wget >/dev/null 2>&1 || { missing="${missing}wget "; packages="${packages}wget "; }
     command -v unzip >/dev/null 2>&1 || { missing="${missing}unzip "; packages="${packages}unzip "; }
     command -v jq >/dev/null 2>&1 || { missing="${missing}jq "; packages="${packages}jq "; }
@@ -238,19 +207,12 @@ import_vless_config() {
     echo -e "  UUID: ${CYAN}$uuid${NC}"
     echo -e "  Type: ${CYAN}$type${NC}, Security: ${CYAN}$security${NC}"
     
-    # Config oluştur
     cat > $XRAY_CONFIG << EOF
 {
   "log": {
     "loglevel": "warning",
     "error": "/var/log/xray/error.log",
     "access": "/var/log/xray/access.log"
-  },
-  "dns": {
-    "servers": [
-      "https://1.1.1.1/dns-query",
-      "https://9.9.9.9/dns-query"
-    ]
   },
   "inbounds": [
     {
@@ -311,7 +273,6 @@ EOF
 EOF
     fi
 
-    # Stream settings
     if [ "$type" = "tcp" ]; then
         cat >> $XRAY_CONFIG << EOF
         "tcpSettings": {
@@ -427,19 +388,12 @@ import_vmess_config() {
     echo -e "  Sunucu: ${CYAN}$add:$port${NC}"
     echo -e "  Protocol: ${CYAN}$net${NC}, TLS: ${CYAN}$tls${NC}"
     
-    # Config oluştur
     cat > $XRAY_CONFIG << EOF
 {
   "log": {
     "loglevel": "warning",
     "error": "/var/log/xray/error.log",
     "access": "/var/log/xray/access.log"
-  },
-  "dns": {
-    "servers": [
-      "https://1.1.1.1/dns-query",
-      "https://9.9.9.9/dns-query"
-    ]
   },
   "inbounds": [
     {
@@ -500,7 +454,6 @@ EOF
 EOF
     fi
 
-    # Stream settings
     if [ "$net" = "tcp" ]; then
         cat >> $XRAY_CONFIG << EOF
         "tcpSettings": {
@@ -605,7 +558,9 @@ import_config_from_url() {
         
         if $XRAY_BIN test -config $XRAY_CONFIG >/dev/null 2>&1; then
             print_success "Config testi başarılı!"
-            $XRAY_INIT restart
+            if [ -f $XRAY_INIT ]; then
+                $XRAY_INIT restart
+            fi
             sleep 2
             show_status
         else
@@ -615,45 +570,24 @@ import_config_from_url() {
     fi
 }
 
-#============== XRAY KURULUMU ==============
+#============== KURULUM (SADECE LUCI) ==============
 install_xray() {
-    print_header "Xray Kurulumu Başlıyor"
+    print_header "Xray LuCI Kurulumu Başlıyor"
     
-    # Xray zaten var mı kontrol et
-    if [ -f "$XRAY_BIN" ]; then
-        print_warning "Xray zaten kurulu! Sadece eksik dosyalar tamamlanacak."
-        # Sadece LuCI, config ve init script kur
-    else
-        check_requirements || exit 1
-    resolve_xray_release
-    
-    # 1. Binary kurulumu
-    echo -e "\n${CYAN}[1/8]${NC} Xray binary indiriliyor..."
-    cd /tmp
-    rm -f xray.zip xray geoip.dat geosite.dat
-    
-    wget -q --show-progress -O xray.zip "$XRAY_URL"
-    
-    if [ ! -f xray.zip ] || [ ! -s xray.zip ]; then
-        print_error "İndirme başarısız!"
+    if [ ! -f "$XRAY_BIN" ]; then
+        print_error "Xray binary bulunamadı: $XRAY_BIN"
+        print_info "Lütfen önce Xray kurun: https://github.com/XTLS/Xray-core"
         exit 1
     fi
     
-    print_success "İndirme tamamlandı ($(ls -lh xray.zip | awk '{print $5}'))"
+    check_requirements || exit 1
     
-    unzip -q -o xray.zip
-    chmod +x xray
-    mv xray $XRAY_BIN
-    rm -f xray.zip geoip.dat geosite.dat
+    print_success "Xray mevcut: $($XRAY_BIN version | head -n1)"
     
     mkdir -p $XRAY_CONFIG_DIR
     mkdir -p $XRAY_LOG_DIR
     touch $XRAY_LOG_DIR/access.log $XRAY_LOG_DIR/error.log
     
-    print_success "Xray binary kuruldu: $($XRAY_BIN version | head -n1)"
-    
-    # 2. UCI Config
-    echo -e "\n${CYAN}[2/8]${NC} UCI config oluşturuluyor..."
     cat > $XRAY_UCI_CONFIG << 'EOF'
 config xray 'config'
 	option enabled '0'
@@ -664,8 +598,6 @@ config xray 'config'
 EOF
     print_success "UCI config oluşturuldu"
     
-    # 3. Init Script
-    echo -e "\n${CYAN}[3/8]${NC} Init script oluşturuluyor..."
     cat > $XRAY_INIT << 'EOF'
 #!/bin/sh /etc/rc.common
 
@@ -767,20 +699,13 @@ EOF
     chmod +x $XRAY_INIT
     print_success "Init script oluşturuldu"
     
-    # 4. Default Config
-    echo -e "\n${CYAN}[4/8]${NC} Varsayılan config oluşturuluyor..."
-    cat > $XRAY_CONFIG << 'EOF'
+    if [ ! -f $XRAY_CONFIG ]; then
+        cat > $XRAY_CONFIG << 'EOF'
 {
   "log": {
     "loglevel": "warning",
     "error": "/var/log/xray/error.log",
     "access": "/var/log/xray/access.log"
-  },
-  "dns": {
-    "servers": [
-      "https://1.1.1.1/dns-query",
-      "https://9.9.9.9/dns-query"
-    ]
   },
   "inbounds": [
     {
@@ -839,20 +764,11 @@ EOF
   }
 }
 EOF
-    print_success "Varsayılan config oluşturuldu"
-
-    # DNS ayarı
-    echo -e "nameserver 127.0.0.1\noptions edns0 trust-ad" > /etc/resolv.conf
-    print_success "DNS yapılandırıldı"
+        print_success "Varsayılan config oluşturuldu"
+    fi
     
-    # 5. LuCI Controller
-    echo -e "\n${CYAN}[5/8]${NC} LuCI controller oluşturuluyor..."
     mkdir -p /usr/lib/lua/luci/controller
     cat > /usr/lib/lua/luci/controller/xray.lua << 'EOF'
---==========================================
--- Xray Controller - FF.Dev ⚡
---==========================================
-
 module("luci.controller.xray", package.seeall)
 
 function index()
@@ -923,17 +839,10 @@ function action_parse_url()
     luci.http.write_json(result)
 end
 EOF
-    print_success "LuCI controller oluşturuldu"
-    
-    # 6. LuCI CBI Models
-    echo -e "\n${CYAN}[6/8]${NC} LuCI CBI models oluşturuluyor..."
+
     mkdir -p /usr/lib/lua/luci/model/cbi/xray
     
     cat > /usr/lib/lua/luci/model/cbi/xray/general.lua << 'EOF'
---==========================================
--- Xray General Settings - FF.Dev ⚡
---==========================================
-
 local sys = require "luci.sys"
 
 m = Map("xray", translate("Xray"), translate("Xray - FF.Dev Edition ⚡"))
@@ -997,10 +906,6 @@ return m
 EOF
 
     cat > /usr/lib/lua/luci/model/cbi/xray/config.lua << 'EOF'
---==========================================
--- Xray Config Editor - FF.Dev ⚡
---==========================================
-
 local fs = require "nixio.fs"
 local sys = require "luci.sys"
 
@@ -1038,10 +943,6 @@ return m
 EOF
 
     cat > /usr/lib/lua/luci/model/cbi/xray/import.lua << 'EOF'
---==========================================
--- Xray URL Import - FF.Dev ⚡
---==========================================
-
 local sys = require "luci.sys"
 local http = require "luci.http"
 
@@ -1110,10 +1011,7 @@ end
 
 return m
 EOF
-    print_success "CBI models oluşturuldu"
-    
-    # 7. LuCI Templates
-    echo -e "\n${CYAN}[7/8]${NC} LuCI templates oluşturuluyor..."
+
     mkdir -p /usr/lib/lua/luci/view/xray
     
     cat > /usr/lib/lua/luci/view/xray/status.htm << 'EOF'
@@ -1162,10 +1060,7 @@ EOF
 <div style="font-size:10px;color:#666;margin-top:2px">FF.Dev ⚡</div>
 <%+cbi/valuefooter%>
 EOF
-    print_success "Templates oluşturuldu"
-    
-    # 8. RPCD ACL
-    echo -e "\n${CYAN}[8/8]${NC} RPCD ACL oluşturuluyor..."
+
     mkdir -p /usr/share/rpcd/acl.d
     cat > /usr/share/rpcd/acl.d/luci-app-xray.json << 'EOF'
 {
@@ -1191,10 +1086,7 @@ EOF
     }
 }
 EOF
-    print_success "RPCD ACL oluşturuldu"
-    
-    # Temizlik ve final
-    echo -e "\n${CYAN}Finalizasyon${NC} yapılıyor..."
+
     rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/* /tmp/luci-sessions/*
     /etc/init.d/rpcd restart 2>/dev/null
     $XRAY_INIT enable 2>/dev/null
@@ -1206,78 +1098,33 @@ EOF
     echo -e "${YELLOW}⚠ URL'nizi yapıştırın ve Import butonuna basın.${NC}"
     echo -e "${PURPLE}⚡ FF.Dev - Yazılımın Efendisi ⚡${NC}"
     echo ""
-
+}
 
 #============== KALDIRMA ==============
 uninstall_xray() {
     print_header "Xray Kaldırılıyor"
     
     print_info "Servis durduruluyor..."
-    $XRAY_INIT stop 2>/dev/null
-    $XRAY_INIT disable 2>/dev/null
+    [ -f $XRAY_INIT ] && $XRAY_INIT stop 2>/dev/null
+    [ -f $XRAY_INIT ] && $XRAY_INIT disable 2>/dev/null
     
-    print_info "Dosyalar siliniyor..."
-    rm -f $XRAY_BIN
-    rm -rf $XRAY_CONFIG_DIR
-    rm -rf $XRAY_LOG_DIR
-    rm -f $XRAY_INIT
-    rm -f $XRAY_UCI_CONFIG
+    print_info "LuCI dosyaları siliniyor..."
     rm -f /usr/lib/lua/luci/controller/xray.lua
     rm -rf /usr/lib/lua/luci/model/cbi/xray
     rm -rf /usr/lib/lua/luci/view/xray
     rm -f /usr/share/rpcd/acl.d/luci-app-xray.json
+    rm -f $XRAY_INIT
+    rm -f $XRAY_UCI_CONFIG
     rm -rf /tmp/luci-*
     
     /etc/init.d/rpcd restart 2>/dev/null
     
-    print_success "Xray tamamen kaldırıldı!"
+    print_success "Xray LuCI kaldırıldı!"
     echo -e "${PURPLE}⚡ FF.Dev ⚡${NC}"
     echo ""
-}
-
-#============== GÜNCELLEME ==============
-update_xray() {
-    print_header "Xray Güncelleniyor"
-    
-    [ ! -f $XRAY_BIN ] && { print_error "Xray kurulu değil!"; return 1; }
-
-    resolve_xray_release
-    
-    local current_version=$($XRAY_BIN version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-    echo -e "  Mevcut: ${CYAN}$current_version${NC}"
-    echo -e "  Yeni:   ${CYAN}$XRAY_VERSION${NC}"
-    
-    if [ "$current_version" = "$XRAY_VERSION" ]; then
-        print_warning "Zaten güncel!"
-        return 0
-    fi
-    
-    $XRAY_INIT stop
-    cp $XRAY_CONFIG /tmp/xray_config_backup.json
-    
-    cd /tmp
-    rm -f xray.zip xray
-    wget -q --show-progress -O xray.zip "$XRAY_URL"
-    
-    if [ -f xray.zip ] && [ -s xray.zip ]; then
-        unzip -q -o xray.zip
-        chmod +x xray
-        mv xray $XRAY_BIN
-        rm -f xray.zip geoip.dat geosite.dat
-        
-        cp /tmp/xray_config_backup.json $XRAY_CONFIG
-        rm /tmp/xray_config_backup.json
-        
-        $XRAY_INIT start
-        print_success "Güncelleme tamamlandı!"
-        echo -e "  Yeni versiyon: $($XRAY_BIN version | head -n1)"
-    else
-        print_error "Güncelleme başarısız!"
-        cp /tmp/xray_config_backup.json $XRAY_CONFIG
-        $XRAY_INIT start
-    fi
-    
-    echo -e "${PURPLE}⚡ FF.Dev ⚡${NC}"
+    print_info "Xray binary (/usr/bin/xray) ve config (/etc/xray) silinmedi."
+    print_info "Tamamen kaldırmak için: rm -f /usr/bin/xray && rm -rf /etc/xray"
+    echo ""
 }
 
 #============== DURUM ==============
@@ -1329,15 +1176,14 @@ show_menu() {
     echo "║        ZLT X28 - OpenWrt 19.07                      ║"
     echo "╠══════════════════════════════════════════════════════╣"
     echo "║                                                      ║"
-    echo "║  1) 📦 Kurulum (Install)                            ║"
-    echo "║  2) 🗑️  Kaldırma (Uninstall)                        ║"
-    echo "║  3) 🔄 Güncelleme (Update)                          ║"
-    echo "║  4) 📊 Durum (Status)                               ║"
-    echo "║  5) ▶️  Başlat (Start)                              ║"
-    echo "║  6) ⏹️  Durdur (Stop)                               ║"
-    echo "║  7) 🔁 Yeniden Başlat (Restart)                     ║"
-    echo "║  8) 📜 Logları Göster (View Logs)                   ║"
-    echo "║  9) 🔗 URL'den Yükle (Import from URL)              ║"
+    echo "║  1) 📦 LuCI Kurulum (LuCI Install)                  ║"
+    echo "║  2) 🗑️  Kaldırma (Uninstall LuCI)                   ║"
+    echo "║  3) 📊 Durum (Status)                               ║"
+    echo "║  4) ▶️  Başlat (Start)                              ║"
+    echo "║  5) ⏹️  Durdur (Stop)                               ║"
+    echo "║  6) 🔁 Yeniden Başlat (Restart)                     ║"
+    echo "║  7) 📜 Logları Göster (View Logs)                   ║"
+    echo "║  8) 🔗 URL'den Yükle (Import from URL)              ║"
     echo "║                                                      ║"
     echo "║  0) 🚪 Çıkış (Exit)                                 ║"
     echo "║                                                      ║"
@@ -1350,7 +1196,6 @@ show_menu() {
 case "$1" in
     install) install_xray; exit 0 ;;
     uninstall) uninstall_xray; exit 0 ;;
-    update) update_xray; exit 0 ;;
     status) show_status; exit 0 ;;
     logs) show_logs; exit 0 ;;
     import) 
@@ -1362,18 +1207,17 @@ case "$1" in
             exit 1
         fi
         ;;
-    start) $XRAY_INIT start; show_status; exit 0 ;;
-    stop) $XRAY_INIT stop; show_status; exit 0 ;;
-    restart) $XRAY_INIT restart; show_status; exit 0 ;;
+    start) [ -f $XRAY_INIT ] && $XRAY_INIT start; show_status; exit 0 ;;
+    stop) [ -f $XRAY_INIT ] && $XRAY_INIT stop; show_status; exit 0 ;;
+    restart) [ -f $XRAY_INIT ] && $XRAY_INIT restart; show_status; exit 0 ;;
     --help|-h)
         echo "Xray Manager v${VERSION} - FF.Dev ⚡"
         echo ""
         echo "Kullanım: $0 [komut]"
         echo ""
         echo "Komutlar:"
-        echo "  install          - Xray kurulumu yap"
-        echo "  uninstall        - Xray kaldır"
-        echo "  update           - Xray güncelle"
+        echo "  install          - LuCI arayüzünü kur (Xray binary mevcut olmalı)"
+        echo "  uninstall        - LuCI arayüzünü kaldır"
         echo "  status           - Durum göster"
         echo "  logs             - Logları göster"
         echo "  import <url>     - URL'den config içe aktar"
@@ -1394,13 +1238,12 @@ while true; do
     case $choice in
         1) install_xray; read -p "Devam için ENTER..."; ;;
         2) uninstall_xray; read -p "Devam için ENTER..."; ;;
-        3) update_xray; read -p "Devam için ENTER..."; ;;
-        4) show_status; read -p "Devam için ENTER..."; ;;
-        5) $XRAY_INIT start; show_status; read -p "Devam için ENTER..."; ;;
-        6) $XRAY_INIT stop; show_status; read -p "Devam için ENTER..."; ;;
-        7) $XRAY_INIT restart; show_status; read -p "Devam için ENTER..."; ;;
-        8) show_logs; read -p "Devam için ENTER..."; ;;
-        9) 
+        3) show_status; read -p "Devam için ENTER..."; ;;
+        4) [ -f $XRAY_INIT ] && $XRAY_INIT start; show_status; read -p "Devam için ENTER..."; ;;
+        5) [ -f $XRAY_INIT ] && $XRAY_INIT stop; show_status; read -p "Devam için ENTER..."; ;;
+        6) [ -f $XRAY_INIT ] && $XRAY_INIT restart; show_status; read -p "Devam için ENTER..."; ;;
+        7) show_logs; read -p "Devam için ENTER..."; ;;
+        8) 
             echo -n "🔗 VMess/VLESS URL: "
             read config_url
             if [ -n "$config_url" ]; then
