@@ -1,7 +1,8 @@
 #!/bin/sh
 
 # =============================
-# BINARY INSTALLER FOR OpenWrt/BusyBox
+# BINARY INSTALLER v3.0 - ZIP EDITION
+# OpenWrt / BusyBox Optimized
 # =============================
 
 GREEN="\033[0;32m"
@@ -11,8 +12,9 @@ BLUE="\033[0;34m"
 NC="\033[0m"
 
 DATA_DIR="/data/.binaries"
-GITHUB_REPO="https://github.com/fckfavor/zlt-x28"
-BINARY_PATH="binaries"
+TEMP_DIR="/tmp/zlt-install"
+GITHUB_ZIP="https://github.com/fckfavor/zlt-x28/archive/refs/heads/main.zip"
+BINARY_PATH="zlt-x28-main/binaries"
 
 # ---------- Print Functions ----------
 print_green() { echo -e "${GREEN}$1${NC}"; }
@@ -20,50 +22,29 @@ print_red() { echo -e "${RED}$1${NC}"; }
 print_yellow() { echo -e "${YELLOW}$1${NC}"; }
 print_blue() { echo -e "${BLUE}$1${NC}"; }
 
-# ---------- Progress Bar for wget (BusyBox friendly) ----------
+# ---------- Progress Bar for wget ----------
 download_with_progress() {
     URL="$1"
     OUTPUT="$2"
-    FILENAME=$(basename "$OUTPUT")
     
-    print_blue "Downloading: $FILENAME"
+    print_blue "Downloading: $(basename "$OUTPUT")"
     
-    # BusyBox wget supports -q (quiet) and -O (output)
-    # Use -q to hide output but show progress with dots
+    # BusyBox wget with progress dots
     wget -O "$OUTPUT" "$URL" 2>&1 | while read line; do
         if echo "$line" | grep -q '%'; then
-            # Extract percentage if available
             PERCENT=$(echo "$line" | grep -o '[0-9]\+%' | head -1)
             if [ -n "$PERCENT" ]; then
-                printf "\r${BLUE}[%-10s${NC}] %s" "$(printf '#%.0s' $(seq 1 $(( ${PERCENT%\%} / 10 ))))" "$PERCENT"
+                bars=$(( ${PERCENT%\%} / 2 ))
+                printf "\r${BLUE}[%-50s${NC}] %s" "$(printf '#%.0s' $(seq 1 $bars 2>/dev/null || echo 0))" "$PERCENT"
             fi
         fi
     done
     
     if [ $? -eq 0 ] && [ -f "$OUTPUT" ]; then
-        printf "\r${GREEN}[##########] 100%%${NC} - Complete!\n"
+        printf "\r${GREEN}[##################################################] 100%%${NC}\n"
         return 0
     else
-        printf "\r${RED}[##########] FAILED${NC}\n"
-        return 1
-    fi
-}
-
-# ---------- Alternative: Simple wget with dots ----------
-simple_download() {
-    URL="$1"
-    OUTPUT="$2"
-    
-    print_blue "Downloading: $(basename "$OUTPUT")"
-    wget -O "$OUTPUT" "$URL" 2>&1 | grep --line-buffered -o '[0-9]\+%' | while read pct; do
-        printf "\rProgress: %s" "$pct"
-    done
-    
-    if [ $? -eq 0 ] && [ -f "$OUTPUT" ]; then
-        printf "\r${GREEN}Complete!             ${NC}\n"
-        return 0
-    else
-        printf "\r${RED}Failed!${NC}\n"
+        printf "\r${RED}[##################################################] FAILED${NC}\n"
         return 1
     fi
 }
@@ -72,209 +53,225 @@ simple_download() {
 check_root() {
     if [ "$(id -u)" != "0" ]; then
         print_red "Error: Root privileges required!"
-        print_yellow "Please run: sudo $0"
         exit 1
     fi
 }
 
-# ---------- Create Data Directory ----------
-ensure_data_dir() {
-    if [ ! -d "$DATA_DIR" ]; then
-        print_yellow "Creating directory: $DATA_DIR"
-        mkdir -p "$DATA_DIR"
+# ---------- Create Directories ----------
+create_dirs() {
+    print_yellow "Creating directories..."
+    mkdir -p "$DATA_DIR"
+    mkdir -p "$TEMP_DIR"
+    print_green "✓ Directory: $DATA_DIR"
+    print_green "✓ Temp: $TEMP_DIR"
+}
+
+# ---------- Download ZIP ----------
+download_zip() {
+    ZIP_FILE="$TEMP_DIR/repo.zip"
+    
+    print_blue "Downloading complete repository as ZIP..."
+    print_yellow "URL: $GITHUB_ZIP"
+    
+    if command -v wget >/dev/null 2>&1; then
+        download_with_progress "$GITHUB_ZIP" "$ZIP_FILE"
+    else
+        curl -L "$GITHUB_ZIP" -o "$ZIP_FILE" --progress-bar
     fi
+    
+    if [ ! -f "$ZIP_FILE" ] || [ ! -s "$ZIP_FILE" ]; then
+        print_red "Download failed!"
+        return 1
+    fi
+    
+    SIZE=$(ls -l "$ZIP_FILE" | awk '{print $5}')
+    print_green "✓ ZIP downloaded: $SIZE bytes"
+    return 0
+}
+
+# ---------- Extract ZIP ----------
+extract_zip() {
+    ZIP_FILE="$TEMP_DIR/repo.zip"
+    
+    print_blue "Extracting ZIP..."
+    
+    # Check if unzip exists
+    if ! command -v unzip >/dev/null 2>&1; then
+        print_yellow "unzip not found, trying to extract with tar/ar..."
+        
+        # Try to list contents
+        cd "$TEMP_DIR"
+        
+        # Alternative extraction for BusyBox
+        if command -v tar >/dev/null 2>&1; then
+            print_yellow "Using tar to extract..."
+            tar -xf "$ZIP_FILE" 2>/dev/null
+        else
+            # Fallback: use unzip from busybox
+            busybox unzip "$ZIP_FILE" -d "$TEMP_DIR" 2>/dev/null
+        fi
+    else
+        unzip -q "$ZIP_FILE" -d "$TEMP_DIR"
+    fi
+    
+    # Check if extraction worked
+    if [ -d "$TEMP_DIR/zlt-x28-main" ]; then
+        print_green "✓ Extraction complete!"
+        return 0
+    else
+        print_red "Extraction failed! Looking for extracted files..."
+        find "$TEMP_DIR" -type d | head -5
+        return 1
+    fi
+}
+
+# ---------- List Available Binaries ----------
+list_binaries() {
+    BINARY_SOURCE="$TEMP_DIR/$BINARY_PATH"
+    
+    if [ ! -d "$BINARY_SOURCE" ]; then
+        print_red "Binary directory not found: $BINARY_SOURCE"
+        return 1
+    fi
+    
+    # Get all files in binaries directory
+    BINARIES=$(ls -1 "$BINARY_SOURCE" 2>/dev/null | grep -v '^$')
+    
+    if [ -z "$BINARIES" ]; then
+        print_red "No binaries found in ZIP!"
+        return 1
+    fi
+    
+    COUNT=$(echo "$BINARIES" | wc -l)
+    print_green "✓ Found $COUNT binaries in ZIP:"
+    echo "$BINARIES" | while read bin; do
+        SIZE=$(ls -l "$BINARY_SOURCE/$bin" 2>/dev/null | awk '{print $5}')
+        echo "   - $bin ($SIZE bytes)"
+    done
+    
+    return 0
 }
 
 # ---------- Check if Binary Exists ----------
 binary_exists() {
     BIN_NAME="$1"
     
-    # Check in DATA_DIR
     if [ -f "$DATA_DIR/$BIN_NAME" ] && [ -x "$DATA_DIR/$BIN_NAME" ]; then
         return 0
     fi
-    
-    # Check in system PATH
-    if command -v "$BIN_NAME" >/dev/null 2>&1; then
-        # Check if it's our symlink
-        if [ -L "/usr/bin/$BIN_NAME" ] && [ "$(readlink "/usr/bin/$BIN_NAME")" = "$DATA_DIR/$BIN_NAME" ]; then
-            return 0
-        fi
-    fi
-    
     return 1
 }
 
-# ---------- Get File Size ----------
-get_file_size() {
-    if [ -f "$1" ]; then
-        ls -l "$1" | awk '{print $5}'
-    else
-        echo "0"
-    fi
-}
-
-# ---------- Check Remote File Info ----------
-check_remote_file() {
-    BIN_NAME="$1"
-    URL="$GITHUB_REPO/raw/main/$BINARY_PATH/$BIN_NAME"
-    
-    # Get remote file size using wget --spider
-    SIZE=$(wget --spider "$URL" 2>&1 | grep "Length:" | awk '{print $2}' | cut -d'(' -f1)
-    
-    if [ -z "$SIZE" ]; then
-        echo "Unknown"
-    else
-        echo "$SIZE"
-    fi
-}
-
-# ---------- BusyBox Handling ----------
-handle_busybox() {
-    if binary_exists "busybox"; then
-        print_yellow "✓ BusyBox already installed (version: $($DATA_DIR/busybox --help | head -1))"
-        print_yellow "  Location: $DATA_DIR/busybox"
-        
-        printf "Reinstall? [y/N]: "
-        read answer
-        case "$answer" in
-            [Yy]*) ;;
-            *) return 0 ;;
-        esac
-    fi
-    
-    BUSYBOX_PATH=$(which busybox 2>/dev/null)
-    if [ -n "$BUSYBOX_PATH" ] && [ -f "$BUSYBOX_PATH" ] && [ ! -L "$BUSYBOX_PATH" ]; then
-        print_yellow "Backing up original busybox: $BUSYBOX_PATH → ${BUSYBOX_PATH}.backup"
-        mv "$BUSYBOX_PATH" "${BUSYBOX_PATH}.backup"
-    fi
-
-    print_blue "Downloading BusyBox..."
-    REMOTE_SIZE=$(check_remote_file "busybox")
-    print_blue "Remote size: $REMOTE_SIZE bytes"
-    
-    # Try progress download, fallback to simple
-    if command -v wget >/dev/null 2>&1; then
-        download_with_progress "$GITHUB_REPO/raw/main/$BINARY_PATH/busybox" "$DATA_DIR/busybox"
-    else
-        curl -L "$GITHUB_REPO/raw/main/$BINARY_PATH/busybox" -o "$DATA_DIR/busybox"
-    fi
-    
-    if [ $? -ne 0 ] || [ ! -f "$DATA_DIR/busybox" ]; then
-        print_red "Failed to download BusyBox!"
-        return 1
-    fi
-    
-    chmod +x "$DATA_DIR/busybox"
-    LOCAL_SIZE=$(get_file_size "$DATA_DIR/busybox")
-    print_green "Downloaded: $LOCAL_SIZE bytes"
-    
-    # Create symlink
-    if [ -L "/usr/bin/busybox" ]; then
-        rm -f "/usr/bin/busybox"
-    fi
-    ln -sf "$DATA_DIR/busybox" "/usr/bin/busybox"
-    
-    print_green "✓ BusyBox installed successfully!"
-    print_green "  Version: $($DATA_DIR/busybox --help | head -1)"
-}
-
-# ---------- Install Single Binary ----------
+# ---------- Install Binary from ZIP ----------
 install_binary() {
     BINARY_NAME="$1"
-    FORCE="$2"
-
-    if [ "$BINARY_NAME" = "busybox" ]; then
-        handle_busybox
-        return
+    SOURCE="$TEMP_DIR/$BINARY_PATH/$BINARY_NAME"
+    DEST="$DATA_DIR/$BINARY_NAME"
+    
+    if [ ! -f "$SOURCE" ]; then
+        print_red "Source not found: $SOURCE"
+        return 1
     fi
-
+    
     # Check if already installed
-    if [ "$FORCE" != "force" ] && binary_exists "$BINARY_NAME"; then
+    if binary_exists "$BINARY_NAME"; then
+        LOCAL_SIZE=$(ls -l "$DEST" 2>/dev/null | awk '{print $5}')
+        SOURCE_SIZE=$(ls -l "$SOURCE" | awk '{print $5}')
+        
         print_yellow "✓ $BINARY_NAME already installed"
-        if [ -f "$DATA_DIR/$BINARY_NAME" ]; then
-            LOCAL_SIZE=$(get_file_size "$DATA_DIR/$BINARY_NAME")
-            print_yellow "  Location: $DATA_DIR/$BINARY_NAME ($LOCAL_SIZE bytes)"
-        fi
-        printf "Reinstall? [y/N]: "
+        print_yellow "  Current: $LOCAL_SIZE bytes"
+        print_yellow "  New: $SOURCE_SIZE bytes"
+        
+        printf "Overwrite? [y/N]: "
         read answer
         case "$answer" in
             [Yy]*) ;;
             *) return 0 ;;
         esac
     fi
-
+    
     print_blue "Installing: $BINARY_NAME"
-    REMOTE_SIZE=$(check_remote_file "$BINARY_NAME")
-    print_blue "Remote size: $REMOTE_SIZE bytes"
     
-    # Download with progress
-    if command -v wget >/dev/null 2>&1; then
-        download_with_progress "$GITHUB_REPO/raw/main/$BINARY_PATH/$BINARY_NAME" "$DATA_DIR/$BINARY_NAME"
-    else
-        curl -L "$GITHUB_REPO/raw/main/$BINARY_PATH/$BINARY_NAME" -o "$DATA_DIR/$BINARY_NAME"
-    fi
+    # Copy binary
+    cp "$SOURCE" "$DEST"
+    chmod +x "$DEST"
     
-    if [ $? -ne 0 ] || [ ! -f "$DATA_DIR/$BINARY_NAME" ]; then
-        print_red "Failed to download $BINARY_NAME!"
-        return 1
-    fi
-
-    chmod +x "$DATA_DIR/$BINARY_NAME"
-    LOCAL_SIZE=$(get_file_size "$DATA_DIR/$BINARY_NAME")
-    print_green "Downloaded: $LOCAL_SIZE bytes"
-
     # Create symlink
     if [ -L "/usr/bin/$BINARY_NAME" ]; then
         rm -f "/usr/bin/$BINARY_NAME"
     fi
-    ln -sf "$DATA_DIR/$BINARY_NAME" "/usr/bin/$BINARY_NAME"
+    ln -sf "$DEST" "/usr/bin/$BINARY_NAME" 2>/dev/null
     
-    print_green "✓ $BINARY_NAME installed successfully!"
+    SIZE=$(ls -l "$DEST" | awk '{print $5}')
+    print_green "✓ $BINARY_NAME installed ($SIZE bytes)"
 }
 
 # ---------- Install All Binaries ----------
 install_all_binaries() {
-    for b in $BINARIES; do
+    SOURCE_DIR="$TEMP_DIR/$BINARY_PATH"
+    
+    if [ ! -d "$SOURCE_DIR" ]; then
+        print_red "Source directory not found!"
+        return 1
+    fi
+    
+    for bin in $BINARIES; do
         echo ""
-        install_binary "$b" "force"
+        install_binary "$bin"
     done
 }
 
-# ---------- Fetch Binaries List ----------
-fetch_binaries() {
-    print_blue "Fetching binary list from GitHub..."
-    
-    BINARIES=$(curl -s "https://api.github.com/repos/fckfavor/zlt-x28/contents/$BINARY_PATH" | grep '"name":' | cut -d '"' -f 4)
-    
-    if [ -z "$BINARIES" ]; then
-        print_red "Failed to fetch binary list! Check internet connection."
-        exit 1
+# ---------- Special Handling for BusyBox ----------
+handle_busybox() {
+    if binary_exists "busybox"; then
+        print_yellow "✓ BusyBox already installed"
+        printf "Reinstall? [y/N]: "
+        read answer
+        case "$answer" in
+            [Yy]*) ;;
+            *) return 0 ;;
+        esac
     fi
     
-    COUNT=$(echo "$BINARIES" | wc -w)
-    print_green "Found $COUNT binaries available"
+    # Backup original busybox
+    BUSYBOX_PATH=$(which busybox 2>/dev/null)
+    if [ -n "$BUSYBOX_PATH" ] && [ -f "$BUSYBOX_PATH" ] && [ ! -L "$BUSYBOX_PATH" ]; then
+        print_yellow "Backing up original: $BUSYBOX_PATH → ${BUSYBOX_PATH}.backup"
+        mv "$BUSYBOX_PATH" "${BUSYBOX_PATH}.backup"
+    fi
+    
+    install_binary "busybox"
+    
+    print_green "✓ BusyBox ready!"
+    "$DATA_DIR/busybox" --help | head -2
+}
+
+# ---------- Cleanup ----------
+cleanup() {
+    print_yellow "Cleaning up temporary files..."
+    rm -rf "$TEMP_DIR"
+    print_green "✓ Cleanup complete!"
 }
 
 # ---------- Show Menu ----------
 show_menu() {
     clear
     echo "============================================"
-    echo "     BINARY INSTALLER v2.0 - OpenWrt"
+    echo "  BINARY INSTALLER v3.0 - ZIP EDITION"
+    echo "         OpenWrt / BusyBox"
     echo "============================================"
-    
-    set -- $BINARIES
-    TOTAL=$#
     
     i=1
     INSTALLED_COUNT=0
+    TOTAL_COUNT=0
     
     for f in $BINARIES; do
+        TOTAL_COUNT=$((TOTAL_COUNT + 1))
         if binary_exists "$f"; then
             INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
-            STATUS="${GREEN}[INSTALLED]${NC}"
+            STATUS="${GREEN}[✓]${NC}"
         else
-            STATUS="${RED}[MISSING]${NC}"
+            STATUS="${RED}[ ]${NC}"
         fi
         printf "  %2d) %-15s %b\n" "$i" "$f" "$STATUS"
         i=$((i+1))
@@ -283,33 +280,38 @@ show_menu() {
     echo "--------------------------------------------"
     printf "  %2d) %-15s\n" "$i" "Install ALL"
     i=$((i+1))
-    printf "  %2d) %-15s\n" "$i" "Check for updates"
+    printf "  %2d) %-15s\n" "$i" "Clean & Exit"
     echo "  0) Exit"
     echo "============================================"
-    printf "Installed: ${GREEN}$INSTALLED_COUNT${NC}/$TOTAL  |  Directory: $DATA_DIR\n"
+    printf "Installed: ${GREEN}$INSTALLED_COUNT${NC}/$TOTAL_COUNT\n"
+    printf "Source: ZIP (local)\n"
     echo "============================================"
     printf "Your choice [0-$i]: "
     read choice
 
     case "$choice" in
         0) 
+            cleanup
             print_green "Goodbye!"
             exit 0 
             ;;
-        $((TOTAL+1))) 
+        $((TOTAL_COUNT+1))) 
             install_all_binaries 
             ;;
-        $((TOTAL+2))) 
-            print_blue "Checking for updates..."
-            fetch_binaries
-            print_green "Update check complete!"
+        $((TOTAL_COUNT+2))) 
+            cleanup
+            exit 0
             ;;
         *)
-            if [ "$choice" -ge 1 ] && [ "$choice" -le "$TOTAL" ]; then
+            if [ "$choice" -ge 1 ] && [ "$choice" -le "$TOTAL_COUNT" ]; then
                 j=1
                 for f in $BINARIES; do
                     if [ "$j" -eq "$choice" ]; then
-                        install_binary "$f"
+                        if [ "$f" = "busybox" ]; then
+                            handle_busybox
+                        else
+                            install_binary "$f"
+                        fi
                         break
                     fi
                     j=$((j+1))
@@ -321,25 +323,25 @@ show_menu() {
     esac
 }
 
-# ---------- Show System Info ----------
-show_system_info() {
-    echo ""
-    print_blue "System Information:"
-    echo "  - OS: $(uname -o 2>/dev/null || echo 'Unknown')"
-    echo "  - Kernel: $(uname -r)"
-    echo "  - Architecture: $(uname -m)"
-    echo "  - BusyBox: $(busybox --help 2>&1 | head -1 || echo 'Not found')"
-    echo "  - Storage: $(df -h "$DATA_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo 'Unknown') free"
-    echo ""
-}
-
 # ---------- Main ----------
 main() {
     check_root
-    ensure_data_dir
-    fetch_binaries
-    show_system_info
-
+    create_dirs
+    
+    print_blue "Step 1/3: Downloading ZIP..."
+    download_zip || exit 1
+    
+    print_blue "Step 2/3: Extracting ZIP..."
+    extract_zip || exit 1
+    
+    print_blue "Step 3/3: Listing binaries..."
+    list_binaries || exit 1
+    
+    echo ""
+    print_green "✓ Repository loaded successfully!"
+    print_yellow "You can now install binaries from local ZIP"
+    echo ""
+    
     while true; do
         show_menu
         echo ""
