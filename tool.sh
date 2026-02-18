@@ -7,55 +7,62 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 TMP_MODULE="/tmp/module.sh"
+BASE_URL="https://github.com/fckfavor/zlt-x28/raw/main/modules"
 
-echo -e "${BLUE}============================${NC}"
-echo "      ZLT X28 TOOL"
-echo -e "${BLUE}============================${NC}"
-echo "1) Binary Kurulumu"
-echo "2) LuCI Install"
-echo "0) Çıkış"
-printf "Seçiminiz: "
-read choice
+show_banner() {
+    echo -e "${BLUE}============================${NC}"
+    echo "       ZLT X28 TOOL"
+    echo -e "${BLUE}============================${NC}"
+    echo "         FF.Dev"
+    echo -e "${BLUE}============================${NC}"
+}
 
-case "$choice" in
-    1)
-        echo -e "${YELLOW}▶ Binary kurulumu başlatılıyor...${NC}"
-        wget -q https://github.com/fckfavor/zlt-x28/raw/main/modules/install-binaries.sh -O "$TMP_MODULE"
-        if [ -f "$TMP_MODULE" ]; then
-            chmod +x "$TMP_MODULE"
-            sh "$TMP_MODULE"
-        else
-            echo -e "${RED}▶ Dosya indirilemedi!${NC}"
-            exit 1
-        fi
-        ;;
-    2)
-        echo -e "${YELLOW}▶ LuCI kurulumu başlatılıyor...${NC}"
-        wget -q https://github.com/fckfavor/zlt-x28/raw/main/modules/luci-install.sh -O "$TMP_MODULE"
-        if [ -f "$TMP_MODULE" ]; then
-            chmod +x "$TMP_MODULE"
-            sh "$TMP_MODULE"
-        else
-            echo -e "${RED}▶ Dosya indirilemedi!${NC}"
-            exit 1
-        fi
-        ;;
-    0)
-        echo "Çıkış yapılıyor."
-        exit 0
-        ;;
-    *)
-        echo -e "${RED}Geçersiz seçim!${NC}"
-        exit 1
-        ;;
-esac
+run_module() {
+    MODULE_URL="$1"
+    MODULE_NAME="$2"
 
-# Temp dosyasını temizle
-rm -f "$TMP_MODULE"
+    echo -e "${YELLOW}▶ $MODULE_NAME başlatılıyor...${NC}"
+    wget -q "$MODULE_URL" -O "$TMP_MODULE" 2>/dev/null
 
-# İmza
-echo ""
-echo -e "${GREEN}✔ İşlem tamamlandı!${NC}"
-echo -e "${BLUE}============================${NC}"
-echo "         FF.Dev"
-echo -e "${BLUE}============================${NC}"
+    if [ -f "$TMP_MODULE" ] && [ -s "$TMP_MODULE" ]; then
+        chmod +x "$TMP_MODULE"
+        sh "$TMP_MODULE"
+        rm -f "$TMP_MODULE"
+    else
+        echo -e "${RED}▶ Dosya indirilemedi!${NC}"
+        rm -f "$TMP_MODULE"
+        return 1
+    fi
+}
+
+while true; do
+    clear
+    show_banner
+    echo "1) Binary Kurulumu"
+    echo "2) LuCI Kurulumu"
+    echo "0) Çıkış"
+    echo -e "${BLUE}============================${NC}"
+    printf "Seçiminiz: "
+    read choice
+
+    case "$choice" in
+        1)
+            run_module "$BASE_URL/install-binaries.sh" "Binary Kurulumu"
+            ;;
+        2)
+            run_module "$BASE_URL/luci-install.sh" "LuCI Kurulumu"
+            ;;
+        0)
+            echo -e "${GREEN}✔ Çıkış yapılıyor.${NC}"
+            echo -e "${BLUE}============================${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Geçersiz seçim!${NC}"
+            ;;
+    esac
+
+    echo ""
+    echo -e "${YELLOW}Devam etmek için Enter'a basın...${NC}"
+    read dummy
+done
