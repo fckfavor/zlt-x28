@@ -5,7 +5,7 @@
 <div align="center">
 # ⚡ FF.Dev ⚡
 <div align="center">
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=30&duration=3000&pause=1000&color=00FF00&center=true&vCenter=true&width=435&lines=ZLT+X28+Master;Binary+Hunter;VPN+Architect;Unlock+King" alt="Typing SVG" />
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=30&duration=3000&pause=1000&color=00FF00&center=true&vCenter=true&width=435&lines=ZLT+X28+Master;Binary+Hunter;VPN+Architect;Unlock+" alt="Typing SVG" />
 
 ---
 
@@ -70,7 +70,4 @@
 
 ---
 
-## 💻 **Tek Satır Kurulum**
 
-```bash
-curl -s -L https://raw.githubusercontent.com/fckfavor/zlt-x28/main/tool.sh | sh
