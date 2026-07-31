@@ -1,10 +1,9 @@
 <div align="center">
-<div align="center">
 
 <img src="https://raw.githubusercontent.com/fckfavor/zlt-x28/main/ico.png" width="120" height="120" alt="FF.Dev Logo">
-<div align="center">
+
 # ⚡ FF.Dev ⚡
-<div align="center">
+
 <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=30&duration=3000&pause=1000&color=00FF00&center=true&vCenter=true&width=435&lines=ZLT+X28+Master;Binary+Hunter;VPN+Architect;Unlock+" alt="Typing SVG" />
 
 ---
@@ -65,6 +64,8 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-@fckfavor-181717?style=for-the-badge&logo=github)](https://github.com/fckfavor)
 [![Telegram](https://img.shields.io/badge/Telegram-@fckfavor-26A5E4?style=for-the-badge&logo=telegram)](https://t.me/fckfavor)
+[![Website](https://img.shields.io/badge/ffdev.online-000000?style=for-the-badge&logo=todoist&logoColor=E8A33D)](https://ffdev.online)
+[![Email](https://img.shields.io/badge/contact@ffdev.online-4FD1C5?style=for-the-badge&logo=maildotru&logoColor=white)](mailto:contact@ffdev.online)
 
 </div>
 
